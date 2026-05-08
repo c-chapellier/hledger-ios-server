@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:55bcb28a3ae9514db0bae2819f5753dc967b510d79761470c9fd6c9240d35697"
+content_hash = "sha256:ec604366a1ecfa8185b462837e93dfcefb1522962d27dff7caf98097286d9c21"
 
 [[metadata.targets]]
 requires_python = "==3.14.*"
@@ -288,6 +288,21 @@ dependencies = [
 files = [
     {file = "fastapi-0.135.3-py3-none-any.whl", hash = "sha256:9b0f590c813acd13d0ab43dd8494138eb58e484bfac405db1f3187cfc5810d98"},
     {file = "fastapi-0.135.3.tar.gz", hash = "sha256:bd6d7caf1a2bdd8d676843cdcd2287729572a1ef524fc4d65c17ae002a1be654"},
+]
+
+[[package]]
+name = "fastapi-analytics"
+version = "1.2.5"
+requires_python = ">=3.6"
+summary = "Monitoring and analytics for FastAPI applications."
+groups = ["default"]
+dependencies = [
+    "fastapi",
+    "requests",
+]
+files = [
+    {file = "fastapi_analytics-1.2.5-py3-none-any.whl", hash = "sha256:e84bdf0bb603d6897dd7826f50ebf9b8d4d2424f19ee4dd465d743cd7208d52a"},
+    {file = "fastapi_analytics-1.2.5.tar.gz", hash = "sha256:8dca8e5079602da85971120ceb357918606a1be7706e7031f87e550e26fbab81"},
 ]
 
 [[package]]

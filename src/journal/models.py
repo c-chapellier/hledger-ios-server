@@ -11,3 +11,7 @@ class Transaction(BaseModel):
 class Posting(BaseModel):
     account: str
     amount: Optional[float]
+
+class Account(BaseModel):
+    name: str
+    balance: float

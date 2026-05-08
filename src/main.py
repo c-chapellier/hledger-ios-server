@@ -5,9 +5,11 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from brotli_asgi import BrotliMiddleware
+from api_analytics.fastapi import Analytics
 
 from .journal import journal_router
 from .github import github_router
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +23,8 @@ app = FastAPI(
     version="0.1.0",
     root_path=""
 )
+
+app.add_middleware(Analytics, api_key="bec0df76-4ce1-4c42-ba6c-02d0d27c53d3")
 
 app.add_middleware(
     CORSMiddleware,
