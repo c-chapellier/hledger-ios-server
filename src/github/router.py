@@ -98,7 +98,7 @@ async def list_repositories():
         print(f"Fetched {len(repos)} repositories for user")
         print(f"Repository names: {[repo['name'] for repo in repos]}")
         print(f"Repos {repos}")
-        return {"repositories": repos}
+        return repos
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch repositories: {str(e)}")
 
@@ -141,4 +141,4 @@ async def list_cloned_repositories(owner: str):
             str(journal_file.resolve().relative_to(repos_dir.resolve()))
         )
     print(f"Found {len(journals)} journal files for user {owner}")
-    return {"journals": journals}
+    return journals
