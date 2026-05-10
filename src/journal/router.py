@@ -6,6 +6,7 @@ import logging
 from .models import Account, Transaction, Posting
 from ..gzip_handler import GzipRoute
 from ..auth.router import get_current_user
+from ..db.db import DB
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,14 @@ async def get_transactions(
     current_user: dict = Depends(get_current_user)
 ) -> list[Transaction]:
     """Get all transactions from a journal"""
-    username = str(current_user["github_username"])
+    username = current_user["github_username"]
     logger.info(f"User {username} requesting transactions from {journal}")
-    journal_path = Path("./repos") / username / journal
+    
+    try:
+        journal_path = DB.get_journal_path(username, journal)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
+    
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail=f"Journal not found at path : {journal_path}")
     
@@ -66,10 +72,14 @@ async def get_balances(
     current_user: dict = Depends(get_current_user)
 ) -> list[Account]:
     """Get all accounts from a journal"""
-    logger.info(f"Received request for accounts from journal: {journal}, {current_user}")
-    username = str(current_user["github_username"])
+    username = current_user["github_username"]
     logger.info(f"User {username} requesting accounts from {journal}")
-    journal_path = Path("./repos") / username / journal
+    
+    try:
+        journal_path = DB.get_journal_path(username, journal)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
+    
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
     

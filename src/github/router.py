@@ -1,12 +1,11 @@
 from fastapi import APIRouter, HTTPException, Depends
 from github import Github
 import git
-import os
-from pathlib import Path
 import logging
 
 from ..gzip_handler import GzipRoute
 from ..auth.router import get_current_user
+from ..db.db import DB
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +47,13 @@ async def clone_repository(
     username = current_user["github_username"]
 
     # Create user-specific directory
-    repos_dir = Path(f"./repos/{username}")
+    repos_dir = DB.get_user_path(username)
     repos_dir.mkdir(parents=True, exist_ok=True)
 
-    repo_path = repos_dir / repo
+    try:
+        repo_path = DB.get_repo_path(username, repo)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
 
     try:
         repo_url = f"https://{access_token}@github.com/{username}/{repo}.git"
@@ -69,7 +71,7 @@ async def list_cloned_journals(
 ):
     """List available journals in the user's cloned repositories"""
     username = current_user["github_username"]
-    repos_dir = Path(f"./repos/{username}")
+    repos_dir = DB.get_user_path(username)
 
     if not repos_dir.exists():
         logger.info(f"No repositories found for user {username}")
