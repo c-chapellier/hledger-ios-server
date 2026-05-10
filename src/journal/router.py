@@ -1,23 +1,27 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pathlib import Path
 import subprocess
 import json
-from fastapi import APIRouter
+import logging
 from .models import Account, Transaction, Posting
-from dotenv import load_dotenv
-load_dotenv()
-
 from ..gzip_handler import GzipRoute
+from ..auth.router import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/journal", tags=["journal"], route_class=GzipRoute)
 
-@router.get("/transactions/{owner}/{journal:path}")
-async def get_transactions(owner: str, journal: str) -> list[Transaction]:
+@router.get("/transactions/{journal:path}")
+async def get_transactions(
+    journal: str,
+    current_user: dict = Depends(get_current_user)
+) -> list[Transaction]:
     """Get all transactions from a journal"""
-    journal_path = Path("./repos") / owner / journal
-    print(f"Looking for journal at: {journal_path}")
+    username = str(current_user["github_username"])
+    logger.info(f"User {username} requesting transactions from {journal}")
+    journal_path = Path("./repos") / username / journal
     if not journal_path.exists():
-        raise HTTPException(status_code=404, detail="Journal not found")
+        raise HTTPException(status_code=404, detail=f"Journal not found at path : {journal_path}")
     
     try:
         result = subprocess.run(
@@ -46,23 +50,28 @@ async def get_transactions(owner: str, journal: str) -> list[Transaction]:
                 formatted_tx.postings.append(formatted_posting)
             formatted_transactions.append(formatted_tx)
         
+        logger.info(f"Successfully retrieved {len(formatted_transactions)} transactions for {username}/{journal}")
         return formatted_transactions
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to run hledger: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal}: {e.stderr or str(e)}")
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse hledger output: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal}: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-    
+        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving transactions for {username}/{journal}: {str(e)}")
 
 
-@router.get("/accounts/{owner}/{journal:path}")
-async def get_balances(owner: str, journal: str) -> list[Account]:
+@router.get("/accounts/{journal:path}")
+async def get_balances(
+    journal: str,
+    current_user: dict = Depends(get_current_user)
+) -> list[Account]:
     """Get all accounts from a journal"""
-    journal_path = Path("./repos") / owner / journal
-    print(f"Looking for journal at: {journal_path}")
+    logger.info(f"Received request for accounts from journal: {journal}, {current_user}")
+    username = str(current_user["github_username"])
+    logger.info(f"User {username} requesting accounts from {journal}")
+    journal_path = Path("./repos") / username / journal
     if not journal_path.exists():
-        raise HTTPException(status_code=404, detail="Journal not found")
+        raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
     
     try:
         result = subprocess.run(
@@ -81,12 +90,11 @@ async def get_balances(owner: str, journal: str) -> list[Account]:
             )
             formatted_accounts.append(formatted_acc)
         
+        logger.info(f"Successfully retrieved {len(formatted_accounts)} accounts for {username}/{journal}")
         return formatted_accounts
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to run hledger: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal}: {e.stderr or str(e)}")
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse hledger output: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal}: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-        
-    
+        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving accounts for {username}/{journal}: {str(e)}")
