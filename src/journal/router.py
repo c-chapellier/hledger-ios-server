@@ -14,13 +14,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/journal", tags=["journal"], route_class=GzipRoute)
 
 
-def pull_repository(journal_path: Path, username: str) -> None:
-    """Pull git repository containing the journal file (fast-forward only).
+async def validate_journal_path(
+    journal: str,
+    current_user: dict = Depends(get_current_user)
+) -> Path:
+    username = current_user["github_username"]
     
-    Security: Only searches for .git within the user's folder to prevent
-    pulling from repositories outside the user's directory.
-    """
-    print(f"Attempting to pull git repository for journal at {journal_path} for user {username}")
+    try:
+        journal_path = DB.get_journal_path(username, journal)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
+    
+    if not journal_path.exists():
+        raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
+    
+    return journal_path
+
+
+def pull_repository(journal_path: Path, username: str) -> None:
     try:
         # Get the user's base directory for security validation
         user_base_path = DB.get_user_path(username)
@@ -66,20 +77,12 @@ def pull_repository(journal_path: Path, username: str) -> None:
 
 @router.get("/transactions/{journal:path}")
 async def get_transactions(
-    journal: str,
+    journal_path: Path = Depends(validate_journal_path),
     current_user: dict = Depends(get_current_user)
 ) -> list[Transaction]:
     """Get all transactions from a journal"""
     username = current_user["github_username"]
-    logger.info(f"User {username} requesting transactions from {journal}")
-    
-    try:
-        journal_path = DB.get_journal_path(username, journal)
-    except ValueError as e:
-        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
-    
-    if not journal_path.exists():
-        raise HTTPException(status_code=404, detail=f"Journal not found at path : {journal_path}")
+    logger.info(f"User {username} requesting transactions from {journal_path}")
     
     pull_repository(journal_path, username)
     
@@ -110,32 +113,24 @@ async def get_transactions(
                 formatted_tx.postings.append(formatted_posting)
             formatted_transactions.append(formatted_tx)
         
-        logger.info(f"Successfully retrieved {len(formatted_transactions)} transactions for {username}/{journal}")
+        logger.info(f"Successfully retrieved {len(formatted_transactions)} transactions for {username}/{journal_path.name}")
         return formatted_transactions
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal}: {e.stderr or str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal_path.name}: {e.stderr or str(e)}")
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal_path.name}: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving transactions for {username}/{journal}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving transactions for {username}/{journal_path.name}: {str(e)}")
 
 
 @router.get("/accounts/{journal:path}")
 async def get_balances(
-    journal: str,
+    journal_path: Path = Depends(validate_journal_path),
     current_user: dict = Depends(get_current_user)
 ) -> list[Account]:
     """Get all accounts from a journal"""
     username = current_user["github_username"]
-    logger.info(f"User {username} requesting accounts from {journal}")
-    
-    try:
-        journal_path = DB.get_journal_path(username, journal)
-    except ValueError as e:
-        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
-    
-    if not journal_path.exists():
-        raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
+    logger.info(f"User {username} requesting accounts from {journal_path}")
     
     pull_repository(journal_path, username)
     
@@ -156,11 +151,11 @@ async def get_balances(
             )
             formatted_accounts.append(formatted_acc)
         
-        logger.info(f"Successfully retrieved {len(formatted_accounts)} accounts for {username}/{journal}")
+        logger.info(f"Successfully retrieved {len(formatted_accounts)} accounts for {username}/{journal_path.name}")
         return formatted_accounts
     except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal}: {e.stderr or str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to run hledger for {username}/{journal_path.name}: {e.stderr or str(e)}")
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal_path.name}: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving accounts for {username}/{journal}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving accounts for {username}/{journal_path.name}: {str(e)}")
