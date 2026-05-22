@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import json
 import logging
+import git
 from .models import Account, Transaction, Posting
 from ..gzip_handler import GzipRoute
 from ..auth.router import get_current_user
@@ -11,6 +12,57 @@ from ..db.db import DB
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/journal", tags=["journal"], route_class=GzipRoute)
+
+
+def pull_repository(journal_path: Path, username: str) -> None:
+    """Pull git repository containing the journal file (fast-forward only).
+    
+    Security: Only searches for .git within the user's folder to prevent
+    pulling from repositories outside the user's directory.
+    """
+    print(f"Attempting to pull git repository for journal at {journal_path} for user {username}")
+    try:
+        # Get the user's base directory for security validation
+        user_base_path = DB.get_user_path(username)
+        
+        # Ensure journal_path is within user's directory
+        if not journal_path.resolve().as_posix().startswith(user_base_path.resolve().as_posix()):
+            logger.error(f"Security violation: journal path {journal_path} is outside user directory for {username}")
+            raise HTTPException(status_code=403, detail="Security violation: path outside user directory")
+        
+        # Find the git repository root by walking up the directory tree, but only within user's folder
+        repo_path = journal_path.parent
+        while repo_path != repo_path.parent:  # Stop at filesystem root
+            # Security check: ensure we don't go outside user's directory
+            if not repo_path.resolve().as_posix().startswith(user_base_path.resolve().as_posix()):
+                logger.warning(f"Git search reached outside user directory for {username}, stopping search")
+                break
+            
+            if (repo_path / ".git").exists():
+                logger.info(f"Found git repo at {repo_path} for user {username}")
+                try:
+                    repo = git.Repo(repo_path)
+                    repo.remotes.origin.pull(ff_only=True) # Pull only if fast-forward (no merge conflicts)
+                    logger.info(f"Successfully pulled repository {repo_path} for user {username}")
+                    return
+                except git.GitCommandError as e:
+                    error_msg = str(e)
+                    if "fatal: Not possible to fast-forward" in error_msg:
+                        logger.warning(f"Git pull rejected (not fast-forward) for {repo_path}: {error_msg}")
+                        raise HTTPException(status_code=409, detail="Repository has diverged from remote (not a fast-forward)")
+                    else:
+                        logger.error(f"Git pull failed for {repo_path}: {error_msg}")
+                        raise HTTPException(status_code=500, detail=f"Failed to pull repository: {error_msg}")
+            repo_path = repo_path.parent
+        
+        # If no git repo found, log and continue (might be a local directory)
+        logger.warning(f"No git repository found for journal at {journal_path}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error pulling repository: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to sync repository: {str(e)}")
+
 
 @router.get("/transactions/{journal:path}")
 async def get_transactions(
@@ -28,6 +80,8 @@ async def get_transactions(
     
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail=f"Journal not found at path : {journal_path}")
+    
+    pull_repository(journal_path, username)
     
     try:
         result = subprocess.run(
@@ -82,6 +136,8 @@ async def get_balances(
     
     if not journal_path.exists():
         raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
+    
+    pull_repository(journal_path, username)
     
     try:
         result = subprocess.run(
