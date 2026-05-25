@@ -10,7 +10,7 @@ RUN pdm export -f requirements --prod > requirements.txt
 FROM python:3.13-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential python3-dev libffi-dev libpq5 \
+    apt-get install -y --no-install-recommends libffi7 libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 appuser
@@ -18,7 +18,7 @@ WORKDIR /app
 COPY --from=builder /app/requirements.txt .
 RUN chown appuser:appuser /app
 USER appuser
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir --only-binary=:all: --user -r requirements.txt 2>&1 | head -20 || true
 
 COPY --chown=appuser:appuser . .
 
