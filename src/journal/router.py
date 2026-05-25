@@ -4,10 +4,12 @@ import subprocess
 import json
 import logging
 import git
-from .models import Account, Transaction, Posting
+from datetime import datetime
+from .models import Account, Transaction, Posting, CreateTransactionRequest, FileListResponse
 from ..gzip_handler import GzipRoute
 from ..auth.router import get_current_user
 from ..db.db import DB
+from ..git.git import Git
 
 logger = logging.getLogger(__name__)
 
@@ -31,50 +33,6 @@ async def validate_journal_path(
     return journal_path
 
 
-def pull_repository(journal_path: Path, username: str) -> None:
-    try:
-        # Get the user's base directory for security validation
-        user_base_path = DB.get_user_path(username)
-        
-        # Ensure journal_path is within user's directory
-        if not journal_path.resolve().as_posix().startswith(user_base_path.resolve().as_posix()):
-            logger.error(f"Security violation: journal path {journal_path} is outside user directory for {username}")
-            raise HTTPException(status_code=403, detail="Security violation: path outside user directory")
-        
-        # Find the git repository root by walking up the directory tree, but only within user's folder
-        repo_path = journal_path.parent
-        while repo_path != repo_path.parent:  # Stop at filesystem root
-            # Security check: ensure we don't go outside user's directory
-            if not repo_path.resolve().as_posix().startswith(user_base_path.resolve().as_posix()):
-                logger.warning(f"Git search reached outside user directory for {username}, stopping search")
-                break
-            
-            if (repo_path / ".git").exists():
-                logger.info(f"Found git repo at {repo_path} for user {username}")
-                try:
-                    repo = git.Repo(repo_path)
-                    repo.remotes.origin.pull(ff_only=True) # Pull only if fast-forward (no merge conflicts)
-                    logger.info(f"Successfully pulled repository {repo_path} for user {username}")
-                    return
-                except git.GitCommandError as e:
-                    error_msg = str(e)
-                    if "fatal: Not possible to fast-forward" in error_msg:
-                        logger.warning(f"Git pull rejected (not fast-forward) for {repo_path}: {error_msg}")
-                        raise HTTPException(status_code=409, detail="Repository has diverged from remote (not a fast-forward)")
-                    else:
-                        logger.error(f"Git pull failed for {repo_path}: {error_msg}")
-                        raise HTTPException(status_code=500, detail=f"Failed to pull repository: {error_msg}")
-            repo_path = repo_path.parent
-        
-        # If no git repo found, log and continue (might be a local directory)
-        logger.warning(f"No git repository found for journal at {journal_path}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error pulling repository: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to sync repository: {str(e)}")
-
-
 @router.get("/transactions/{journal:path}")
 async def get_transactions(
     journal_path: Path = Depends(validate_journal_path),
@@ -84,7 +42,7 @@ async def get_transactions(
     username = current_user["github_username"]
     logger.info(f"User {username} requesting transactions from {journal_path}")
     
-    pull_repository(journal_path, username)
+    Git.pull_repository(journal_path, username)
     
     try:
         result = subprocess.run(
@@ -132,7 +90,7 @@ async def get_balances(
     username = current_user["github_username"]
     logger.info(f"User {username} requesting accounts from {journal_path}")
     
-    pull_repository(journal_path, username)
+    Git.pull_repository(journal_path, username)
     
     try:
         result = subprocess.run(
@@ -159,3 +117,119 @@ async def get_balances(
         raise HTTPException(status_code=500, detail=f"Failed to parse hledger JSON output for {username}/{journal_path.name}: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error retrieving accounts for {username}/{journal_path.name}: {str(e)}")
+
+
+@router.get("/files/{journal:path}")
+async def get_journal_files(
+    journal: str,
+    current_user: dict = Depends(get_current_user)
+) -> FileListResponse:
+    """Get all available journal files for a given journal file/directory"""
+    username = current_user["github_username"]
+    
+    try:
+        journal_path = DB.get_journal_path(username, journal)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
+    
+    if not journal_path.exists():
+        raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
+    
+    logger.info(f"User {username} requesting journal files from {journal_path}")
+    
+    Git.pull_repository(journal_path, username)
+
+    try:
+        # Use hledger files command to get all included journal files
+        result = subprocess.run(
+            ["hledger", "files", "-f", str(journal_path)],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        files = result.stdout.strip().split('\n')
+        # Filter out empty lines and convert to relative paths
+        user_base_path = DB.get_user_path(username)
+        relative_files = []
+        
+        for file_path in files:
+            if file_path.strip():
+                try:
+                    rel_path = str(Path(file_path).resolve().relative_to(user_base_path.resolve()))
+                    relative_files.append(rel_path)
+                except ValueError:
+                    # File is outside user directory, skip it
+                    logger.warning(f"Skipping file outside user directory: {file_path}")
+                    continue
+        
+        logger.info(f"Retrieved {len(relative_files)} journal files for {username}")
+        return FileListResponse(files=relative_files)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to run hledger files: {e.stderr or str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error retrieving journal files: {str(e)}")
+
+
+@router.post("/transactions")
+async def create_transaction(
+    request: CreateTransactionRequest,
+    current_user: dict = Depends(get_current_user)
+) -> dict:
+    """Create a new transaction in a journal file"""
+    username = current_user["github_username"]
+    
+    try:
+        journal_path = DB.get_journal_path(username, request.journal)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=f"Security violation: {str(e)}")
+    if not journal_path.exists():
+        raise HTTPException(status_code=404, detail=f"Journal not found at path: {journal_path}")
+    if len(request.postings) != 2:
+        raise HTTPException(status_code=400, detail="Exactly 2 postings are required")
+    
+    logger.info(f"User {username} creating transaction in {journal_path}")
+
+    Git.pull_repository(journal_path, username)
+    
+    try:
+        
+        # Format the transaction in hledger format
+        transaction_text = f"{request.date}\n{request.description}"
+        if request.comment:
+            transaction_text += f"; {request.comment}"
+        transaction_text += "\n"
+        for posting in request.postings:
+            if posting.amount is not None:
+                transaction_text += f"{posting.account}\n{posting.amount}\n"
+        # add postings without amount at the end to have balancing
+        for posting in request.postings:
+            if posting.amount is None:
+                transaction_text += f"{posting.account}\n\n"
+
+        result = subprocess.run(
+            ["hledger", "add", "-f", str(journal_path)],
+            input=transaction_text + "\ny\n.\n",
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+        
+        logger.info(f"Successfully added transaction to {journal_path} using hledger add")
+
+        Git.add_commit_push_repository(journal_path, username, f"[HLEDGER SERVER] Add transaction: {request.description} on {request.date}")
+        
+        return {
+            "message": "Transaction created successfully",
+            "success": True
+        }
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"hledger add failed for {username}: {e.stderr or str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to add transaction: {e.stderr or str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error creating transaction for {username}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create transaction: {str(e)}")

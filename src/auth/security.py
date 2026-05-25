@@ -43,6 +43,7 @@ def create_jwt(user_id: str, github_username: str, access_token: str) -> str:
 
 def verify_jwt(token: str) -> dict:
     """Verify and decode JWT."""
+    print("Verifying JWT token:", token)
     try:
         return jwt.decode(token, config.SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
